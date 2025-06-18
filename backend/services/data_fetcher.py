@@ -199,11 +199,19 @@ class DataFetcher:
                     ).first()
                     
                     if not existing_race:
+                        # Calculate post time with proper minute handling
+                        base_hour = 19
+                        minutes_increment = race_num * 15
+                        total_minutes = minutes_increment
+                        hours_to_add = total_minutes // 60
+                        final_minutes = total_minutes % 60
+                        final_hour = base_hour + hours_to_add
+                        
                         race = Race(
                             track_id=track.id,
                             race_number=race_num,
                             race_date=race_date,
-                            post_time=datetime.combine(race_date, datetime.min.time().replace(hour=19, minute=race_num*15)),
+                            post_time=datetime.combine(race_date, datetime.min.time().replace(hour=final_hour, minute=final_minutes)),
                             distance=1609,  # 1 mile in meters
                             purse=15000.00,
                             race_type='allowance',
