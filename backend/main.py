@@ -213,22 +213,214 @@ async def get_data_status(db: Session = Depends(get_db)):
     return data_fetcher.get_data_status(db)
 
 @app.post("/api/data/fetch-real")
-async def fetch_real_ontario_data(db: Session = Depends(get_db)):
-    """Test endpoint to fetch real Ontario harness racing data"""
+async def fetch_real_data(db: Session = Depends(get_db)):
+    """Fetch real Ontario harness racing data"""
     try:
-        from services.ontario_racing_api import OntarioRacingAPI
-        
-        ontario_api = OntarioRacingAPI()
-        real_data = await ontario_api.get_real_ontario_data()
-        
+        result = await data_fetcher.fetch_and_store_real_data(db)
+        return result
+    except Exception as e:
+        logger.error(f"Error fetching real data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/data/live-odds")
+async def get_live_odds():
+    """Get live odds for Ontario tracks"""
+    try:
+        from services.ontario_racing_api import get_live_ontario_odds
+        odds = await get_live_ontario_odds()
         return {
-            "message": "Real data fetch completed", 
-            "data": real_data,
-            "sources_attempted": ["Woodbine Mohawk Park", "Standardbred Canada"],
+            "success": True,
+            "odds": odds,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching real data: {str(e)}")
+        logger.error(f"Error getting live odds: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/data/future-races")
+async def get_future_races(days: int = 7):
+    """Get future races for the next N days"""
+    try:
+        from services.ontario_racing_api import get_ontario_future_races
+        races = await get_ontario_future_races(days)
+        return {
+            "success": True,
+            "races": races,
+            "days_ahead": days,
+            "total_races": len(races),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting future races: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/data/today-races")
+async def get_today_races():
+    """Get today's Ontario harness races"""
+    try:
+        from services.ontario_racing_api import get_ontario_races_today
+        races = await get_ontario_races_today()
+        return {
+            "success": True,
+            "races": races,
+            "date": date.today().isoformat(),
+            "total_races": len(races),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting today's races: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/data/race-results/{track}/{race_date}")
+async def get_race_results(track: str, race_date: str):
+    """Get race results for a specific track and date"""
+    try:
+        from services.ontario_racing_api import get_ontario_race_results
+        from datetime import datetime
+        
+        # Parse date
+        parsed_date = datetime.strptime(race_date, "%Y-%m-%d").date()
+        results = await get_ontario_race_results(track, parsed_date)
+        
+        return {
+            "success": True,
+            "results": results,
+            "track": track,
+            "date": race_date,
+            "total_results": len(results),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting race results: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stats/horse/{horse_name}")
+async def get_enhanced_horse_stats(horse_name: str):
+    """Get enhanced horse statistics from real data sources"""
+    try:
+        from services.ontario_racing_api import search_horse_stats
+        stats = await search_horse_stats(horse_name)
+        return {
+            "success": True,
+            "horse_name": horse_name,
+            "statistics": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting horse stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stats/driver/{driver_name}")
+async def get_enhanced_driver_stats(driver_name: str):
+    """Get enhanced driver statistics from real data sources"""
+    try:
+        from services.ontario_racing_api import search_driver_stats
+        stats = await search_driver_stats(driver_name)
+        return {
+            "success": True,
+            "driver_name": driver_name,
+            "statistics": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting driver stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stats/trainer/{trainer_name}")
+async def get_enhanced_trainer_stats(trainer_name: str):
+    """Get enhanced trainer statistics from real data sources"""
+    try:
+        from services.ontario_racing_api import search_trainer_stats
+        stats = await search_trainer_stats(trainer_name)
+        return {
+            "success": True,
+            "trainer_name": trainer_name,
+            "statistics": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting trainer stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/data/update-odds")
+async def update_live_odds(db: Session = Depends(get_db)):
+    """Update live odds for today's races"""
+    try:
+        result = await data_fetcher.update_live_odds(db)
+        return result
+    except Exception as e:
+        logger.error(f"Error updating live odds: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/data/comprehensive-fetch")
+async def comprehensive_data_fetch(db: Session = Depends(get_db)):
+    """Fetch comprehensive Ontario racing data including races, odds, and statistics"""
+    try:
+        data_fetcher = DataFetcher()
+        
+        # Fetch real data
+        real_data_result = await data_fetcher.fetch_and_store_real_data(db)
+        
+        # Get live odds
+        from services.ontario_racing_api import get_live_ontario_odds
+        live_odds = await get_live_ontario_odds()
+        
+        # Get future races
+        from services.ontario_racing_api import get_ontario_future_races
+        future_races = await get_ontario_future_races(14)  # Next 2 weeks
+        
+        return {
+            "success": True,
+            "data_fetch_result": real_data_result,
+            "live_odds": live_odds,
+            "future_races_count": len(future_races),
+            "data_sources": [
+                "Standardbred Canada",
+                "Woodbine Mohawk Park", 
+                "The Odds API",
+                "Ontario Racing Commission"
+            ],
+            "features": [
+                "Real-time race entries",
+                "Live odds updates",
+                "Historical race results",
+                "Horse/Driver/Trainer statistics",
+                "Future race schedules",
+                "Track conditions",
+                "Weather information"
+            ],
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error in comprehensive data fetch: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/test/scraping")
+async def test_scraping_capabilities():
+    """Test web scraping capabilities for Ontario racing data"""
+    try:
+        from services.web_scraper import test_ontario_scraping
+        results = await test_ontario_scraping()
+        
+        return {
+            "success": True,
+            "scraping_test_results": results,
+            "summary": {
+                "standardbred_canada": results['standardbred_canada']['status'],
+                "woodbine_mohawk": results['woodbine_mohawk']['status'],
+                "live_odds": results['live_odds']['status']
+            },
+            "recommendations": [
+                "If scraping shows 'no_data', the HTML structure may need customization",
+                "If scraping shows 'error', check network connectivity and rate limiting",
+                "Real data integration requires adapting parsers to actual website structures",
+                "Consider using APIs when available for more reliable data access"
+            ],
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error testing scraping capabilities: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(

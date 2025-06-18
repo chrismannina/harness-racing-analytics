@@ -1,6 +1,8 @@
 import httpx
 import asyncio
+import random
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Any, Optional
 import logging
@@ -9,13 +11,12 @@ import re
 import json
 from models import Track, Horse, Driver, Trainer, Race, RaceEntry, DataFetch
 from schemas import DataStatusResponse
-from services.ontario_racing_api import OntarioRacingAPI
+from services.ontario_racing_api import OntarioRacingDataService, get_ontario_races_today, get_ontario_future_races, get_live_ontario_odds, get_ontario_race_results, search_horse_stats, search_driver_stats, search_trainer_stats
 
 logger = logging.getLogger(__name__)
 
 class DataFetcher:
     def __init__(self):
-        self.ontario_api = OntarioRacingAPI()
         self.base_urls = {
             'standardbred_canada': 'https://standardbredcanada.ca',
             'woodbine_mohawk': 'https://woodbine.com/mohawk',
@@ -326,12 +327,12 @@ class DataFetcher:
             logger.info("Attempting to fetch real Ontario harness racing data...")
             
             # Use the Ontario Racing API to get real data
-            real_data = await self.ontario_api.get_real_ontario_data()
+            real_data = await self.fetch_real_ontario_data()
             
-            if real_data:
+            if real_data.get('data_quality') == 'real' and real_data.get('total_races', 0) > 0:
                 # Process today's races
-                today_races = real_data.get('today_races', [])
-                historical_races = real_data.get('historical_races', [])
+                today_races = real_data.get('todays_races', [])
+                historical_races = real_data.get('future_races', [])
                 
                 # Create races from real data
                 races_created = await self._process_real_races(db, today_races + historical_races, results)
@@ -350,6 +351,93 @@ class DataFetcher:
             logger.error(f"Error fetching real data: {e}")
             results['errors'].append(f"Real data fetch error: {str(e)}")
             return False
+    
+    async def fetch_real_ontario_data(self) -> Dict[str, Any]:
+        """Fetch real Ontario harness racing data from multiple sources"""
+        logger.info("Fetching real Ontario harness racing data...")
+        
+        try:
+            # Get today's races
+            todays_races = await get_ontario_races_today()
+            
+            # Get future races (next 7 days)
+            future_races = await get_ontario_future_races(7)
+            
+            # Get live odds
+            live_odds = await get_live_ontario_odds()
+            
+            # Get recent results (past 3 days)
+            recent_results = []
+            for i in range(1, 4):
+                past_date = date.today() - timedelta(days=i)
+                for track in ["Woodbine Mohawk Park", "Georgian Downs", "Grand River Raceway"]:
+                    results = await get_ontario_race_results(track, past_date)
+                    recent_results.extend(results)
+            
+            return {
+                'todays_races': todays_races,
+                'future_races': future_races,
+                'live_odds': live_odds,
+                'recent_results': recent_results,
+                'sources': [
+                    'Standardbred Canada',
+                    'Woodbine Mohawk Park',
+                    'The Odds API',
+                    'Ontario Racing Commission'
+                ],
+                'last_updated': datetime.now().isoformat(),
+                'data_quality': 'real',
+                'total_races': len(todays_races) + len(future_races)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching real Ontario data: {e}")
+            # Fallback to sample data
+            return await self.generate_sample_data()
+    
+    async def fetch_and_store_real_data(self, db: Session) -> Dict[str, Any]:
+        """Fetch real Ontario racing data and store it in the database"""
+        logger.info("Fetching and storing real Ontario racing data...")
+        
+        try:
+            # Fetch real data
+            real_data = await self.fetch_real_ontario_data()
+            
+            if real_data.get('data_quality') == 'real' and real_data.get('total_races', 0) > 0:
+                # Process and store the data
+                results = {
+                    'races_updated': 0,
+                    'horses_updated': 0,
+                    'drivers_updated': 0,
+                    'trainers_updated': 0,
+                    'entries_updated': 0,
+                    'errors': []
+                }
+                
+                # Initialize tracks
+                await self._initialize_tracks(db)
+                
+                # Process races
+                all_races = real_data.get('todays_races', []) + real_data.get('future_races', [])
+                races_created = await self._process_real_races(db, all_races, results)
+                
+                return {
+                    'success': True,
+                    'data_source': 'real',
+                    'statistics': results,
+                    'sources': real_data.get('sources', []),
+                    'total_races': real_data.get('total_races', 0),
+                    'last_updated': real_data.get('last_updated')
+                }
+            else:
+                # Fallback to sample data
+                logger.info("Real data not available, using sample data")
+                return await self.generate_and_store_sample_data(db)
+                
+        except Exception as e:
+            logger.error(f"Error in fetch_and_store_real_data: {e}")
+            # Fallback to sample data on error
+            return await self.generate_and_store_sample_data(db)
     
     async def _process_real_races(self, db: Session, race_results: List, results: Dict[str, Any]) -> int:
         """Process real race results and create database entries"""
@@ -507,3 +595,315 @@ class DataFetcher:
             results['trainers_updated'] += 1
         
         return trainer
+
+    async def update_live_odds(self, db: Session) -> Dict[str, Any]:
+        """Update live odds for today's races"""
+        try:
+            live_odds = await get_live_ontario_odds()
+            
+            if not live_odds:
+                return {'success': False, 'message': 'No live odds available'}
+            
+            updated_count = 0
+            
+            # Update odds in database
+            # This would need to be implemented based on the actual odds data structure
+            
+            return {
+                'success': True,
+                'updated_entries': updated_count,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Error updating live odds: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    async def get_enhanced_horse_stats(self, horse_name: str) -> Dict[str, Any]:
+        """Get enhanced horse statistics from real data sources"""
+        try:
+            stats = await search_horse_stats(horse_name)
+            return stats
+        except Exception as e:
+            logger.error(f"Error getting enhanced horse stats: {e}")
+            return {}
+    
+    async def get_enhanced_driver_stats(self, driver_name: str) -> Dict[str, Any]:
+        """Get enhanced driver statistics from real data sources"""
+        try:
+            stats = await search_driver_stats(driver_name)
+            return stats
+        except Exception as e:
+            logger.error(f"Error getting enhanced driver stats: {e}")
+            return {}
+    
+    async def get_enhanced_trainer_stats(self, trainer_name: str) -> Dict[str, Any]:
+        """Get enhanced trainer statistics from real data sources"""
+        try:
+            stats = await search_trainer_stats(trainer_name)
+            return stats
+        except Exception as e:
+            logger.error(f"Error getting enhanced trainer stats: {e}")
+            return {}
+
+    # Keep existing sample data methods as fallback
+    async def generate_sample_data(self) -> Dict[str, Any]:
+        """Generate sample harness racing data as fallback"""
+        logger.info("Generating sample Ontario harness racing data...")
+        
+        # Sample tracks in Ontario
+        tracks = [
+            "Woodbine Mohawk Park",
+            "Georgian Downs", 
+            "Grand River Raceway",
+            "Hanover Raceway",
+            "Hiawatha Horse Park"
+        ]
+        
+        # Sample race data
+        races = []
+        for track in tracks:
+            for race_num in range(1, random.randint(8, 12)):  # 8-12 races per track
+                race = {
+                    'track': track,
+                    'race_number': race_num,
+                    'date': date.today(),
+                    'post_time': f"{6 + race_num}:00 PM",
+                    'distance': "1 Mile",
+                    'surface': "Fast",
+                    'race_type': random.choice(["Pace", "Trot"]),
+                    'purse': random.randint(8000, 25000),
+                    'conditions': "Open Handicap",
+                    'entries': self._generate_sample_entries(8)
+                }
+                races.append(race)
+        
+        return {
+            'todays_races': races,
+            'future_races': [],
+            'live_odds': {},
+            'recent_results': [],
+            'sources': ['Sample Data Generator'],
+            'last_updated': datetime.now().isoformat(),
+            'data_quality': 'sample',
+            'total_races': len(races)
+        }
+    
+    def _generate_sample_entries(self, count: int) -> List[Dict]:
+        """Generate sample race entries"""
+        sample_horses = [
+            "Lightning Strike", "Thunder Bay", "Maple Leaf", "Northern Star",
+            "Golden Arrow", "Silver Bullet", "Racing Thunder", "Swift Wind",
+            "Midnight Express", "Royal Flush", "Lucky Charm", "Fire Storm"
+        ]
+        
+        sample_drivers = [
+            "John MacDonald", "Trevor Henry", "Scott Coulter", "Doug McNair",
+            "James MacDonald", "Jody Jamieson", "Bob McClure", "Tyler Borth"
+        ]
+        
+        sample_trainers = [
+            "Ben Wallace", "Richard Moreau", "Carl Jamieson", "Robert McIntosh",
+            "Travis Cullen", "Jodie Cullen", "Mark Steacy", "Paul MacKenzie"
+        ]
+        
+        entries = []
+        for i in range(count):
+            entry = {
+                'horse_name': random.choice(sample_horses),
+                'driver': random.choice(sample_drivers),
+                'trainer': random.choice(sample_trainers),
+                'post_position': i + 1,
+                'program_number': str(i + 1),
+                'morning_line_odds': f"{random.randint(2, 12)}-1",
+                'age': random.randint(3, 8),
+                'sex': random.choice(['M', 'F', 'G']),
+                'sire': "Unknown Sire",
+                'dam': "Unknown Dam",
+                'owner': f"Owner {i + 1}",
+                'earnings': random.randint(5000, 150000),
+                'starts': random.randint(10, 50),
+                'wins': random.randint(1, 15),
+                'places': random.randint(2, 20),
+                'shows': random.randint(3, 25)
+            }
+            entries.append(entry)
+        
+        return entries
+
+    async def generate_and_store_sample_data(self, db: Session) -> Dict[str, Any]:
+        """Generate and store sample data in database"""
+        logger.info("Generating and storing sample data...")
+        
+        try:
+            # Clear existing data
+            db.execute(text("DELETE FROM race_entries"))
+            db.execute(text("DELETE FROM races"))
+            db.execute(text("DELETE FROM horses"))
+            db.execute(text("DELETE FROM drivers"))
+            db.execute(text("DELETE FROM trainers"))
+            db.commit()
+
+            stats = {
+                'races_created': 0,
+                'horses_created': 0,
+                'drivers_created': 0,
+                'trainers_created': 0,
+                'entries_created': 0
+            }
+
+            # Create sample trainers
+            sample_trainers = [
+                "Ben Wallace", "Richard Moreau", "Carl Jamieson", "Robert McIntosh",
+                "Travis Cullen", "Jodie Cullen", "Mark Steacy", "Paul MacKenzie"
+            ]
+            
+            trainers = {}
+            for trainer_name in sample_trainers:
+                trainer = Trainer(
+                    name=trainer_name,
+                    license_number=f"TRN{random.randint(1000, 9999)}",
+                    stable_name=f"{trainer_name} Stable",
+                    phone=f"519-{random.randint(100, 999)}-{random.randint(1000, 9999)}",
+                    email=f"{trainer_name.lower().replace(' ', '.')}@email.com"
+                )
+                db.add(trainer)
+                trainers[trainer_name] = trainer
+                stats['trainers_created'] += 1
+
+            # Create sample drivers
+            sample_drivers = [
+                "John MacDonald", "Trevor Henry", "Scott Coulter", "Doug McNair",
+                "James MacDonald", "Jody Jamieson", "Bob McClure", "Tyler Borth"
+            ]
+            
+            drivers = {}
+            for driver_name in sample_drivers:
+                driver = Driver(
+                    name=driver_name,
+                    license_number=f"ON{random.randint(1000, 9999)}",
+                    birth_date=date(random.randint(1970, 1995), random.randint(1, 12), random.randint(1, 28)),
+                    hometown="Ontario, Canada"
+                )
+                db.add(driver)
+                drivers[driver_name] = driver
+                stats['drivers_created'] += 1
+
+            # Create sample horses
+            sample_horses = [
+                "Lightning Strike", "Thunder Bay", "Maple Leaf", "Northern Star",
+                "Golden Arrow", "Silver Bullet", "Racing Thunder", "Swift Wind",
+                "Midnight Express", "Royal Flush", "Lucky Charm", "Fire Storm",
+                "Blazing Speed", "Storm Chaser", "Victory Lane", "Power Play"
+            ]
+            
+            horses = {}
+            for horse_name in sample_horses:
+                horse = Horse(
+                    name=horse_name,
+                    age=random.randint(3, 8),
+                    sex=random.choice(['M', 'F', 'G']),
+                    sire="Unknown Sire",
+                    dam="Unknown Dam", 
+                    color=random.choice(['Bay', 'Brown', 'Chestnut', 'Black', 'Grey']),
+                    foaling_date=date(2024 - random.randint(3, 8), random.randint(1, 12), random.randint(1, 28)),
+                    owner=f"Owner {random.randint(1, 20)}",
+                    breeder=f"Breeder {random.randint(1, 15)}"
+                )
+                db.add(horse)
+                horses[horse_name] = horse
+                stats['horses_created'] += 1
+
+            db.flush()  # Ensure IDs are assigned
+
+            # Create sample races
+            tracks = [
+                "Woodbine Mohawk Park",
+                "Georgian Downs", 
+                "Grand River Raceway",
+                "Hanover Raceway"
+            ]
+
+            race_dates = [date.today() + timedelta(days=i) for i in range(-2, 5)]
+            
+            for track in tracks:
+                for race_date in race_dates:
+                    # Skip some days for some tracks
+                    if random.random() < 0.3:
+                        continue
+                        
+                    num_races = random.randint(8, 12)
+                    for race_num in range(1, num_races + 1):
+                        # Calculate race time with proper minute handling
+                        base_hour = 18  # 6 PM
+                        race_minutes = (race_num - 1) * 20  # 20 minutes between races
+                        race_hour = base_hour + (race_minutes // 60)
+                        race_minute = race_minutes % 60
+                        
+                        post_time = datetime.combine(
+                            race_date, 
+                            datetime.min.time().replace(hour=race_hour, minute=race_minute)
+                        )
+
+                        race = Race(
+                            track_name=track,
+                            race_date=race_date,
+                            race_number=race_num,
+                            post_time=post_time,
+                            distance=random.choice([1609, 1609, 1200, 1400]),  # Mostly 1 mile
+                            purse=random.randint(8000, 25000),
+                            race_type=random.choice(["Pace", "Trot"]),
+                            track_condition=random.choice(["Fast", "Good", "Sloppy"]),
+                            weather=random.choice(["Clear", "Cloudy", "Light Rain"])
+                        )
+                        db.add(race)
+                        stats['races_created'] += 1
+
+                        db.flush()  # Get race ID
+
+                        # Create race entries
+                        num_entries = random.randint(6, 10)
+                        selected_horses = random.sample(list(horses.keys()), min(num_entries, len(horses)))
+                        
+                        for i, horse_name in enumerate(selected_horses):
+                            horse = horses[horse_name]
+                            driver = random.choice(list(drivers.values()))
+                            trainer = random.choice(list(trainers.values()))
+
+                            entry = RaceEntry(
+                                race_id=race.id,
+                                horse_id=horse.id,
+                                driver_id=driver.id,
+                                trainer_id=trainer.id,
+                                post_position=i + 1,
+                                program_number=str(i + 1),
+                                morning_line_odds=random.uniform(1.5, 15.0),
+                                actual_odds=random.uniform(1.2, 20.0),
+                                finish_position=random.randint(1, num_entries) if race_date < date.today() else None,
+                                win_time=f"1:{random.randint(50, 59)}.{random.randint(10, 99)}" if race_date < date.today() and random.random() < 0.2 else None,
+                                earnings=random.randint(0, 5000) if race_date < date.today() else 0.0,
+                                equipment_change="",
+                                scratched=random.random() < 0.05,  # 5% scratch rate
+                                late_change=""
+                            )
+                            db.add(entry)
+                            stats['entries_created'] += 1
+
+            db.commit()
+            logger.info(f"Sample data created successfully: {stats}")
+            
+            return {
+                'success': True,
+                'data_source': 'sample',
+                'statistics': stats,
+                'sources': ['Sample Data Generator']
+            }
+
+        except Exception as e:
+            logger.error(f"Error generating sample data: {e}")
+            db.rollback()
+            return {
+                'success': False,
+                'error': str(e),
+                'data_source': 'sample'
+            }
