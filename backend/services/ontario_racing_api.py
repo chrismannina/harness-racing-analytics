@@ -212,6 +212,60 @@ class OntarioRacingDataService:
             logger.error(f"Error getting trainer statistics: {e}")
             return {}
 
+    async def get_available_tracks(self) -> List[Dict[str, str]]:
+        """Get list of available tracks from Standardbred Canada"""
+        try:
+            url = f"{self.base_urls['standardbred_canada']}/racing"
+            response = await self.client.get(url)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            tracks = []
+            
+            # Find track selection dropdown
+            track_select = soup.find('select', {'name': 'entries_track'})
+            if track_select:
+                options = track_select.find_all('option')
+                for option in options:
+                    value = option.get('value', '')
+                    text = option.get_text(strip=True)
+                    
+                    # Filter for Ontario tracks
+                    ontario_tracks = ['GEODF', 'GRVRF', 'WBSBS', 'HNVR', 'SAR F', 'KD F', 'CLNTN', 'DRES']
+                    if value in ontario_tracks:
+                        tracks.append({
+                            'code': value,
+                            'name': text,
+                            'province': 'Ontario'
+                        })
+            
+            return tracks
+            
+        except Exception as e:
+            logger.error(f"Error getting available tracks: {e}")
+            return []
+
+    async def get_track_racing_dates(self, track_code: str) -> List[str]:
+        """Get racing dates for a specific track"""
+        try:
+            url = f"{self.base_urls['standardbred_canada']}/racing/racedates"
+            response = await self.client.get(url)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Look for date information
+            dates = []
+            date_elements = soup.find_all(text=re.compile(r'\d{4}-\d{2}-\d{2}'))
+            
+            for date_text in date_elements:
+                date_match = re.search(r'\d{4}-\d{2}-\d{2}', date_text)
+                if date_match:
+                    dates.append(date_match.group())
+            
+            return list(set(dates))  # Remove duplicates
+            
+        except Exception as e:
+            logger.error(f"Error getting racing dates: {e}")
+            return []
+
     # Private methods for data sources
 
     async def _get_standardbred_canada_races(self, race_date: date) -> List[Race]:
@@ -344,19 +398,19 @@ class OntarioRacingDataService:
         results = []
         
         try:
-            url = f"{self.base_urls['standardbred_canada']}/results"
+            # Use the correct results URL structure
+            url = f"{self.base_urls['standardbred_canada']}/racing"
             
-            # Add query parameters for track and date
+            # Add query parameters for results tab
             params = {
-                'track': track,
-                'date': race_date.strftime("%Y-%m-%d")
+                'active_tab': 'results'
             }
             
             response = await self.client.get(url, params=params)
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Parse results - placeholder implementation
-            result_elements = soup.find_all('div', class_='race-result')
+            # Parse results - look for results tables or cards
+            result_elements = soup.find_all(['div', 'table'], class_=re.compile(r'result|race', re.I))
             
             for result_elem in result_elements:
                 result = self._parse_sc_result_element(result_elem, track, race_date)
