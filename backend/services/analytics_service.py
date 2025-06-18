@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func, extract
+from sqlalchemy import and_, desc, func, extract, case
 from typing import List, Dict, Any
 from datetime import datetime, date, timedelta
 from models import Race, RaceEntry, Horse, Driver, Trainer, Track
@@ -110,7 +110,7 @@ class AnalyticsService:
             Horse.id,
             Horse.name,
             func.count(RaceEntry.id).label('total_starts'),
-            func.sum(func.case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
+            func.sum(case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
             func.sum(RaceEntry.earnings).label('total_earnings')
         ).join(RaceEntry)\
          .filter(Horse.active == True)\
@@ -136,7 +136,7 @@ class AnalyticsService:
             Horse.id,
             Horse.name,
             func.count(RaceEntry.id).label('total_starts'),
-            func.sum(func.case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
+            func.sum(case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
             func.sum(RaceEntry.earnings).label('total_earnings')
         ).join(RaceEntry)\
          .filter(Horse.active == True)\
@@ -162,14 +162,14 @@ class AnalyticsService:
             Horse.id,
             Horse.name,
             func.count(RaceEntry.id).label('total_starts'),
-            func.sum(func.case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
+            func.sum(case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
             func.sum(RaceEntry.earnings).label('total_earnings')
         ).join(RaceEntry)\
          .filter(Horse.active == True)\
          .filter(RaceEntry.scratched == False)\
          .group_by(Horse.id, Horse.name)\
          .having(func.count(RaceEntry.id) >= min_starts)\
-         .order_by(desc(func.sum(func.case((RaceEntry.finish_position == 1, 1), else_=0)) / func.count(RaceEntry.id)))\
+         .order_by(desc(func.sum(case((RaceEntry.finish_position == 1, 1), else_=0)) / func.count(RaceEntry.id)))\
          .limit(limit).all()
         
         return [

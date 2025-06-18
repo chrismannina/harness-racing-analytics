@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func
+from sqlalchemy import and_, desc, func, case
 from typing import List, Optional
 from models import Horse, RaceEntry, Race, Track, Driver, Trainer
 from schemas import HorseResponse, HorseDetailResponse, HorseStatsResponse, RaceResultResponse
@@ -25,9 +25,9 @@ class HorseService:
         # Get basic stats
         stats = db.query(
             func.count(RaceEntry.id).label('total_starts'),
-            func.sum(func.case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
-            func.sum(func.case((RaceEntry.finish_position == 2, 1), else_=0)).label('places'),
-            func.sum(func.case((RaceEntry.finish_position == 3, 1), else_=0)).label('shows'),
+            func.sum(case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
+            func.sum(case((RaceEntry.finish_position == 2, 1), else_=0)).label('places'),
+            func.sum(case((RaceEntry.finish_position == 3, 1), else_=0)).label('shows'),
             func.sum(RaceEntry.earnings).label('total_earnings')
         ).filter(RaceEntry.horse_id == horse_id)\
          .filter(RaceEntry.scratched == False)\

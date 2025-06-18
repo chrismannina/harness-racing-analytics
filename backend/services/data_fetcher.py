@@ -6,17 +6,21 @@ from typing import Dict, List, Any, Optional
 import logging
 from bs4 import BeautifulSoup
 import re
+import json
 from models import Track, Horse, Driver, Trainer, Race, RaceEntry, DataFetch
 from schemas import DataStatusResponse
+from services.ontario_racing_api import OntarioRacingAPI
 
 logger = logging.getLogger(__name__)
 
 class DataFetcher:
     def __init__(self):
+        self.ontario_api = OntarioRacingAPI()
         self.base_urls = {
-            'woodbine': 'https://woodbine.com/mohawk/',
-            'standardbred_canada': 'https://www.standardbredcanada.ca/',
-            'ontario_racing': 'https://www.ontarioracing.com/'
+            'standardbred_canada': 'https://standardbredcanada.ca',
+            'woodbine_mohawk': 'https://woodbine.com/mohawk',
+            'ontario_racing': 'https://www.ontarioracing.com',
+            'usta_racing': 'https://racing.ustrotting.com'
         }
         self.session = httpx.AsyncClient(timeout=30.0)
     
@@ -37,8 +41,13 @@ class DataFetcher:
             await self._initialize_tracks(db)
             results['tracks_updated'] = 1
             
-            # Fetch sample data for demonstration
-            await self._fetch_sample_data(db, results)
+            # Try to fetch real data first
+            real_data_success = await self._fetch_real_data(db, results)
+            
+            # If real data fetch fails or returns minimal data, use sample data as fallback
+            if not real_data_success or results['races_updated'] < 5:
+                logger.info("Real data fetch unsuccessful, falling back to sample data")
+                await self._fetch_sample_data(db, results)
             
             # Record successful fetch
             self._record_fetch(db, 'all_sources', 'complete', 'success', 
@@ -310,3 +319,191 @@ class DataFetcher:
     async def close(self):
         """Close the HTTP session"""
         await self.session.aclose()
+    
+    async def _fetch_real_data(self, db: Session, results: Dict[str, Any]) -> bool:
+        """Attempt to fetch real racing data from Ontario sources"""
+        try:
+            logger.info("Attempting to fetch real Ontario harness racing data...")
+            
+            # Use the Ontario Racing API to get real data
+            real_data = await self.ontario_api.get_real_ontario_data()
+            
+            if real_data:
+                # Process today's races
+                today_races = real_data.get('today_races', [])
+                historical_races = real_data.get('historical_races', [])
+                
+                # Create races from real data
+                races_created = await self._process_real_races(db, today_races + historical_races, results)
+                
+                if races_created > 0:
+                    logger.info(f"Successfully created {races_created} races from real data")
+                    return True
+                else:
+                    logger.info("No new races created from real data sources")
+            
+            # If real data fetch didn't work or returned no data, log and return False
+            logger.info("Real data fetch completed but no usable data found")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error fetching real data: {e}")
+            results['errors'].append(f"Real data fetch error: {str(e)}")
+            return False
+    
+    async def _process_real_races(self, db: Session, race_results: List, results: Dict[str, Any]) -> int:
+        """Process real race results and create database entries"""
+        races_created = 0
+        
+        try:
+            for race_result in race_results:
+                # Get or create track
+                track = db.query(Track).filter(Track.name == race_result.track_name).first()
+                if not track:
+                    # Create track if it doesn't exist
+                    track = Track(
+                        name=race_result.track_name,
+                        location="Ontario, Canada",
+                        surface="synthetic",
+                        circumference=875.0,
+                        active=True
+                    )
+                    db.add(track)
+                    db.commit()
+                    results['tracks_updated'] += 1
+                
+                # Check if race already exists
+                existing_race = db.query(Race).filter(
+                    Race.track_id == track.id,
+                    Race.race_number == race_result.race_number,
+                    Race.race_date == race_result.race_date
+                ).first()
+                
+                if not existing_race:
+                    # Create new race
+                    race = Race(
+                        track_id=track.id,
+                        race_number=race_result.race_number,
+                        race_date=race_result.race_date,
+                        post_time=race_result.post_time,
+                        distance=race_result.distance,
+                        purse=race_result.purse,
+                        race_type=race_result.race_type,
+                        track_condition=race_result.track_condition,
+                        status='finished' if race_result.entries else 'scheduled'
+                    )
+                    db.add(race)
+                    db.commit()
+                    races_created += 1
+                    results['races_updated'] += 1
+                    
+                    # Process race entries if available
+                    if race_result.entries:
+                        entries_created = await self._process_real_entries(db, race.id, race_result.entries, results)
+                        results['entries_updated'] += entries_created
+        
+        except Exception as e:
+            logger.error(f"Error processing real races: {e}")
+            results['errors'].append(f"Race processing error: {str(e)}")
+        
+        return races_created
+    
+    async def _process_real_entries(self, db: Session, race_id: int, entries: List[Dict], results: Dict[str, Any]) -> int:
+        """Process real race entries and create database entries"""
+        entries_created = 0
+        
+        try:
+            for entry_data in entries:
+                # Get or create horse
+                horse = await self._get_or_create_horse(db, entry_data.get('horse_name'), results)
+                
+                # Get or create driver
+                driver = await self._get_or_create_driver(db, entry_data.get('driver_name'), results)
+                
+                # Get or create trainer
+                trainer = await self._get_or_create_trainer(db, entry_data.get('trainer_name'), results)
+                
+                if horse:
+                    # Create race entry
+                    race_entry = RaceEntry(
+                        race_id=race_id,
+                        horse_id=horse.id,
+                        driver_id=driver.id if driver else None,
+                        trainer_id=trainer.id if trainer else None,
+                        post_position=None,  # Would need to extract from real data
+                        finish_position=entry_data.get('finish_position'),
+                        earnings=entry_data.get('earnings', 0),
+                        odds=entry_data.get('odds'),
+                        scratched=False
+                    )
+                    db.add(race_entry)
+                    entries_created += 1
+            
+            db.commit()
+        
+        except Exception as e:
+            logger.error(f"Error processing real entries: {e}")
+            results['errors'].append(f"Entry processing error: {str(e)}")
+        
+        return entries_created
+    
+    async def _get_or_create_horse(self, db: Session, horse_name: str, results: Dict[str, Any]) -> Optional[Horse]:
+        """Get existing horse or create new one"""
+        if not horse_name:
+            return None
+            
+        horse = db.query(Horse).filter(Horse.name == horse_name).first()
+        if not horse:
+            horse = Horse(
+                name=horse_name,
+                registration_number=f"ON{len(horse_name)}{hash(horse_name) % 10000:04d}",
+                foaling_year=2018,  # Default year, would need real data
+                sire="Unknown",
+                dam="Unknown",
+                sex="G",
+                color="Brown",
+                active=True
+            )
+            db.add(horse)
+            db.commit()
+            results['horses_updated'] += 1
+        
+        return horse
+    
+    async def _get_or_create_driver(self, db: Session, driver_name: str, results: Dict[str, Any]) -> Optional[Driver]:
+        """Get existing driver or create new one"""
+        if not driver_name:
+            return None
+            
+        driver = db.query(Driver).filter(Driver.name == driver_name).first()
+        if not driver:
+            driver = Driver(
+                name=driver_name,
+                license_number=f"DRV{hash(driver_name) % 10000:04d}",
+                hometown="Ontario, Canada",
+                active=True
+            )
+            db.add(driver)
+            db.commit()
+            results['drivers_updated'] += 1
+        
+        return driver
+    
+    async def _get_or_create_trainer(self, db: Session, trainer_name: str, results: Dict[str, Any]) -> Optional[Trainer]:
+        """Get existing trainer or create new one"""
+        if not trainer_name:
+            return None
+            
+        trainer = db.query(Trainer).filter(Trainer.name == trainer_name).first()
+        if not trainer:
+            trainer = Trainer(
+                name=trainer_name,
+                license_number=f"TRN{hash(trainer_name) % 10000:04d}",
+                location="Ontario, Canada",
+                active=True
+            )
+            db.add(trainer)
+            db.commit()
+            results['trainers_updated'] += 1
+        
+        return trainer

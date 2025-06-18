@@ -212,6 +212,24 @@ async def get_data_status(db: Session = Depends(get_db)):
     """Get data freshness and status"""
     return data_fetcher.get_data_status(db)
 
+@app.post("/api/data/fetch-real")
+async def fetch_real_ontario_data(db: Session = Depends(get_db)):
+    """Test endpoint to fetch real Ontario harness racing data"""
+    try:
+        from services.ontario_racing_api import OntarioRacingAPI
+        
+        ontario_api = OntarioRacingAPI()
+        real_data = await ontario_api.get_real_ontario_data()
+        
+        return {
+            "message": "Real data fetch completed", 
+            "data": real_data,
+            "sources_attempted": ["Woodbine Mohawk Park", "Standardbred Canada"],
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching real data: {str(e)}")
+
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",

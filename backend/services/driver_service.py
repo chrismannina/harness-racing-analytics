@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func
+from sqlalchemy import and_, desc, func, case
 from typing import List, Optional
 from models import Driver, RaceEntry, Race, Track, Horse, Trainer
 from schemas import DriverResponse, DriverDetailResponse, DriverStatsResponse
@@ -25,9 +25,9 @@ class DriverService:
         # Get basic stats
         stats = db.query(
             func.count(RaceEntry.id).label('total_starts'),
-            func.sum(func.case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
-            func.sum(func.case((RaceEntry.finish_position == 2, 1), else_=0)).label('places'),
-            func.sum(func.case((RaceEntry.finish_position == 3, 1), else_=0)).label('shows'),
+            func.sum(case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
+            func.sum(case((RaceEntry.finish_position == 2, 1), else_=0)).label('places'),
+            func.sum(case((RaceEntry.finish_position == 3, 1), else_=0)).label('shows'),
             func.sum(RaceEntry.earnings).label('total_earnings')
         ).filter(RaceEntry.driver_id == driver_id)\
          .filter(RaceEntry.scratched == False)\
@@ -66,7 +66,7 @@ class DriverService:
             Driver.id,
             Driver.name,
             func.count(RaceEntry.id).label('total_starts'),
-            func.sum(func.case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
+            func.sum(case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
             func.sum(RaceEntry.earnings).label('total_earnings')
         ).join(RaceEntry)\
          .filter(Driver.active == True)\
@@ -92,7 +92,7 @@ class DriverService:
             Driver.id,
             Driver.name,
             func.count(RaceEntry.id).label('total_starts'),
-            func.sum(func.case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
+            func.sum(case((RaceEntry.finish_position == 1, 1), else_=0)).label('wins'),
             func.sum(RaceEntry.earnings).label('total_earnings')
         ).join(RaceEntry)\
          .filter(Driver.active == True)\
